@@ -1,6 +1,6 @@
 # Valve Stiction ML Training — Plan
 
-Status: Draft v0.5 (milestone 3 done — full dataset labeled, see §7, §12, §13) · Scope: the V3 "bounded ML comparison" component of the [Valve Stiction Fault Detection — Distributed IoT Pipeline PRD](../../../Kuliah/Tugas%20Akhir/File%20TA/Github%20Tugas%20Akhir). This repo owns two things now, not one: a reference implementation of the unsupervised classic detector (needed as a label source, and reusable for the PRD's V1), and training/evaluation of the ML classifier that's meant to approximate it cheaply.
+Status: Draft v0.6 (milestone 4 done — features extracted, see §8, §12) · Scope: the V3 "bounded ML comparison" component of the [Valve Stiction Fault Detection — Distributed IoT Pipeline PRD](../../../Kuliah/Tugas%20Akhir/File%20TA/Github%20Tugas%20Akhir). This repo owns two things now, not one: a reference implementation of the unsupervised classic detector (needed as a label source, and reusable for the PRD's V1), and training/evaluation of the ML classifier that's meant to approximate it cheaply.
 
 **Note on "unsupervised":** we considered making clustering (KMeans/GMM) the primary modeling method instead of a classic-detector-taught RF. Rejected after brainstorming — see rationale in §10.1. Short version: clustering has no way to know your target concept (stiction specifically, vs. whatever axis of variation happens to dominate feature space), and grounding cluster identity credibly runs straight back into the same file-vs-window granularity problem that started this whole revision (§2). The classic detector is *already* unsupervised (zero training data, zero human labels) — it's just not clustering. Clustering is kept, but demoted to a validation/sanity-check role.
 
@@ -87,11 +87,13 @@ This also strengthens the portfolio story: *"I didn't trust my own thesis-era fi
 - Validated against SACAC's literature-tagged files (`tests/test_classic_real_fixtures.py`, real data, skipped if not imported): `stiction-F-paper-horch-2003.csv` — stick-slip detected in 11/11 windows. `stiction-P-oilgas-DB-1-baccidicapaci-2018.csv` — detected in only its last 2 of 7 windows; PV sits essentially flat for the rest of the file despite being folder-labeled "yes" for its entire duration. **This is a real, observed instance of exactly the file-vs-window label mismatch §2 predicted**, not just a theoretical concern. `saturation-T-oilgas-thornhill-2002.csv` and `quantisation-Q-paper-horch-2003.csv` (both folder-labeled "no", different fault types) — correctly 0/14 and 0/11.
 - This module is written so it could be lifted directly into the PRD's V1 real-time service later — same interface, no ML dependency, intentionally kept dependency-light (numpy/scipy only).
 
-## 8. Feature engineering (for the RF side)
+## 8. Feature engineering (for the RF side) — status: implemented, run on full dataset
 
 - Use tsfel's statistical + temporal feature domains, as before.
 - Correlation-based feature pruning (threshold ~0.9) to control overfitting risk on a small, now-further-filtered (uncertain windows dropped) dataset.
 - Feature list saved in the model artifact's metadata — never hardcoded separately in an inference script.
+- **Performance**: calling tsfel once per window measured at ~1.4s/window (~55 minutes for this corpus). Fixed by normalizing each window independently, concatenating normalized windows back-to-back, and letting tsfel do its own internal windowing in one batched call per run — since every concatenated segment is exactly `window_size` samples, tsfel's internal split at the same size recovers identical boundaries, just ~125x faster (~11ms/window batched vs. ~1.4s per-window). Full corpus (2328 windows) extracts in under a minute.
+- **Results** (`scripts/extract_features.py` → `data/processed/features.csv`): 90 raw tsfel features (statistical + temporal, both PV and OP) pruned to 58 after correlation filtering (threshold 0.9). 96 of 2328 confident windows (4.1%) dropped for NaN features — **all 96 were "no"-labeled windows**, not a random sample: `derive_label`'s "no" case requires both detectors to agree there's minimal width/activity, which selects for the flattest, most near-constant windows — exactly where tsfel's skew/kurtosis calculations hit numerical instability (catastrophic cancellation on near-zero-variance signals). Expected given the definition, not a bug, but shifts the positive rate slightly (18.3% → 19.1%). Final dataset: 2232 windows (ISDB: 1203 no / 255 yes: SACAC: 602 no / 172 yes).
 
 ## 9. Model selection
 
@@ -162,7 +164,7 @@ valve-stiction-ml/
    | SACAC | 615 | 637 | 172 | 44.7% |
 
    2328 confident windows total (1901 no / 427 yes, ~18.3% positive rate) survive for RF training. Sanity-check agreement with the old folder labels, on confident windows only, **not used to pick any parameter**: 86.8% overall (87.0% ISDB, 86.3% SACAC) — reassuring: where the new method is confident, it mostly agrees with the original file-level labels, and the difference is in correctly abstaining on ambiguous windows rather than blindly propagating a file's label to all of them. Checkpoint verdict: uncertain rate is substantial but not disqualifying — see §13.
-4. Preprocessing + tsfel feature pipeline, with tests.
+4. ✅ Preprocessing + tsfel feature pipeline, with tests. 90 raw features → 58 after correlation pruning; 2232 confident windows survive (see §8).
 5. Baseline RF trained against classic-detector labels: GroupKFold CV on ISDB, final untouched evaluation on SACAC.
 6. Report sanity-check agreement (RF vs. old folder labels) as a separate, clearly-labeled section — not the headline metric.
 7. Clustering sanity check (§10.1): KMeans/GMM on the same standardized features, check separation against classic-detector labels, report as a figure.
