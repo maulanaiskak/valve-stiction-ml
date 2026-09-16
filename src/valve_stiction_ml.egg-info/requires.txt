@@ -1,0 +1,11 @@
+numpy
+pandas
+scipy
+scikit-learn
+tsfel
+joblib
+pyyaml
+matplotlib
+
+[dev]
+pytest

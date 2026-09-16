@@ -1,0 +1,28 @@
+[project]
+name = "valve-stiction-ml"
+version = "0.1.0"
+description = "Training pipeline for valve stiction detection: unsupervised classic detector (ellipse-fit + Kano) as label source, RF as a cheap approximation."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy",
+    "pandas",
+    "scipy",
+    "scikit-learn",
+    "tsfel",
+    "joblib",
+    "pyyaml",
+    "matplotlib",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]

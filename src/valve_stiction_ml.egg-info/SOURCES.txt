@@ -1,0 +1,7 @@
+README.md
+pyproject.toml
+src/valve_stiction_ml.egg-info/PKG-INFO
+src/valve_stiction_ml.egg-info/SOURCES.txt
+src/valve_stiction_ml.egg-info/dependency_links.txt
+src/valve_stiction_ml.egg-info/requires.txt
+src/valve_stiction_ml.egg-info/top_level.txt

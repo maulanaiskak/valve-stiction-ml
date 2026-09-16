@@ -1,0 +1,32 @@
+# See docs/ML_PLAN.md for rationale behind each of these.
+
+paths:
+  raw_dir: data/raw
+  manifest: data/processed/manifest.csv
+  models_dir: models
+  reports_dir: reports
+
+window:
+  size: 100
+  # non-overlapping by default (stride == size); see ML_PLAN.md §6/§13
+  # for why this may need revisiting once the classic detector is validated.
+  stride: 100
+
+normalization: zscore-per-window
+
+classic_detector:
+  # Tuned on ISDB only, never on SACAC (ML_PLAN.md §7, §13).
+  ellipse_stiction_threshold: null # to be set during milestone 2/3
+  agreement_required: true # drop windows where ellipse-fit and Kano disagree
+
+random_forest:
+  n_estimators: 300
+  max_depth: null
+  min_samples_leaf: 2
+  max_features: sqrt
+  class_weight: balanced
+  random_state: 42
+
+cross_validation:
+  n_splits: 5
+  group_column: loop_id
