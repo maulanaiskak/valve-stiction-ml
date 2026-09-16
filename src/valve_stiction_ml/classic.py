@@ -197,3 +197,28 @@ def derive_label(
     if not ellipse_verdict and not kano_verdict:
         return "no"
     return "uncertain"
+
+
+def label_window(
+    pv_raw: np.ndarray,
+    op_raw: np.ndarray,
+    ellipse_threshold: float,
+    reference_op_std: float | None = None,
+    min_relative_activity: float = 0.15,
+) -> Literal["yes", "no", "uncertain"]:
+    """The actual per-window entry point: raw (non-normalized) pv/op in,
+    label out. Combines the activity guard with normalization + both
+    detectors, so callers don't have to remember the right order of
+    operations (see module docstring for why the activity guard has to
+    run on raw data, before normalization).
+    """
+    if reference_op_std is not None and not has_sufficient_activity(
+        op_raw, reference_op_std, min_relative_activity
+    ):
+        return "no"  # valve wasn't being driven enough to judge stick-slip on
+
+    def zscore(x: np.ndarray) -> np.ndarray:
+        std = x.std()
+        return (x - x.mean()) / std if std > 0 else x - x.mean()
+
+    return derive_label(zscore(pv_raw), zscore(op_raw), ellipse_threshold)

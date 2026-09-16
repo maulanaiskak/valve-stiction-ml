@@ -4,6 +4,7 @@ from valve_stiction_ml.classic import (
     ellipse_stiction_index,
     has_sufficient_activity,
     kano_pattern_check,
+    label_window,
 )
 
 
@@ -90,3 +91,28 @@ def test_has_sufficient_activity_flags_inactive_op():
 def test_has_sufficient_activity_no_reference_means_no_filtering():
     _, op_calm = make_calm()
     assert has_sufficient_activity(op_calm, reference_op_std=0.0) is True
+
+
+def test_label_window_returns_no_for_inactive_op_without_running_detectors():
+    pv_calm, op_calm = make_calm()
+    _, op_active = make_stick_slip()
+
+    label = label_window(
+        pv_calm, op_calm, ellipse_threshold=1.0, reference_op_std=op_active.std()
+    )
+
+    assert label == "no"
+
+
+def test_label_window_normalizes_raw_input_consistently_with_derive_label():
+    pv_s, op_s = make_stick_slip()
+
+    # a generous threshold (0.5) should agree with derive_label on
+    # already-normalized input, confirming label_window's internal
+    # normalization matches what tests elsewhere assume
+    from valve_stiction_ml.classic import derive_label
+
+    expected = derive_label(zscore(pv_s), zscore(op_s), ellipse_threshold=0.5)
+    actual = label_window(pv_s, op_s, ellipse_threshold=0.5, reference_op_std=None)
+
+    assert actual == expected

@@ -15,8 +15,13 @@ window:
 normalization: zscore-per-window
 
 classic_detector:
-  # Tuned on ISDB only, never on SACAC (ML_PLAN.md §7, §13).
-  ellipse_stiction_threshold: null # to be set during milestone 2/3
+  # 10th percentile of ellipse_stiction_index on ISDB's active windows.
+  # Tuned on ISDB only, never on SACAC. See ML_PLAN.md §7 for why this is a
+  # round percentile convention, not fit to maximize agreement with
+  # kano_pattern_check or with the old folder labels (both were tried and
+  # rejected -- see §7).
+  ellipse_stiction_threshold: 0.3762
+  min_relative_activity: 0.15 # has_sufficient_activity guard, see classic.py
   agreement_required: true # drop windows where ellipse-fit and Kano disagree
 
 random_forest:
