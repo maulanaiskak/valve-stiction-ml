@@ -1,6 +1,6 @@
 # Valve Stiction ML Training — Plan
 
-Status: Draft v0.8 (milestone 7 done — clustering sanity check, genuine caveat found, see §10.1) · Scope: the V3 "bounded ML comparison" component of the [Valve Stiction Fault Detection — Distributed IoT Pipeline PRD](../../../Kuliah/Tugas%20Akhir/File%20TA/Github%20Tugas%20Akhir). This repo owns two things now, not one: a reference implementation of the unsupervised classic detector (needed as a label source, and reusable for the PRD's V1), and training/evaluation of the ML classifier that's meant to approximate it cheaply.
+Status: v1.0 (milestones 1-10 complete — pipeline, RF baseline, and inference-facing README finalized; only the optional gradient-boosting comparison and the PRD's future simulator integration remain, see §12) · Scope: the V3 "bounded ML comparison" component of the [Valve Stiction Fault Detection — Distributed IoT Pipeline PRD](../../../Kuliah/Tugas%20Akhir/File%20TA/Github%20Tugas%20Akhir). This repo owns two things now, not one: a reference implementation of the unsupervised classic detector (needed as a label source, and reusable for the PRD's V1), and training/evaluation of the ML classifier that's meant to approximate it cheaply.
 
 **Note on "unsupervised":** we considered making clustering (KMeans/GMM) the primary modeling method instead of a classic-detector-taught RF. Rejected after brainstorming — see rationale in §10.1. Short version: clustering has no way to know your target concept (stiction specifically, vs. whatever axis of variation happens to dominate feature space), and grounding cluster identity credibly runs straight back into the same file-vs-window granularity problem that started this whole revision (§2). The classic detector is *already* unsupervised (zero training data, zero human labels) — it's just not clustering. Clustering is kept, but demoted to a validation/sanity-check role.
 
@@ -107,7 +107,7 @@ This also strengthens the portfolio story: *"I didn't trust my own thesis-era fi
 
 - **Metrics reported**, computed against the classic-detector labels (the actual training target): precision, recall, F1, PR-AUC, ROC-AUC, confusion matrix, on StratifiedGroupKFold-CV and on the untouched SACAC set.
 - **Reported separately, not as a training metric**: agreement rate between (a) classic detector's verdict and the old folder labels (§7), (b) RF's verdict and the old folder labels — both framed as sanity checks, per §4.
-- **Model artifact**: joblib bundle with `{model, feature_names, window_size, normalization, label_source, classic_detector_threshold, sklearn_version, git_commit_hash, best_params, cv_metrics, cv_sanity_check_agreement, test_metrics, test_sanity_check_agreement, trained_at}` — self-describing, so a deployed model can't silently drift out of sync with what it was trained on (unlike the thesis's `subscribe.py`, where the feature list lived separately from the model file).
+- **Model artifact**: joblib bundle with `{model, feature_names, window_size, normalization, label_source, classic_detector_threshold, predict_threshold, sklearn_version, git_commit_hash, best_params, cv_metrics, cv_sanity_check_agreement, test_metrics, test_sanity_check_agreement, trained_at}` — self-describing, so a deployed model can't silently drift out of sync with what it was trained on (unlike the thesis's `subscribe.py`, where the feature list lived separately from the model file). `inference.py`'s `load_artifact`/`predict_window` is the one sanctioned way to consume it — raw window in, `{"label", "probability"}` out, re-deriving normalization and feature selection internally rather than trusting a caller to get that order right.
 - **Versioning**: directory-based registry, `models/<date>_<git-short-hash>/`, mirrored to `reports/<date>_<git-short-hash>.json` for the metrics alone — no MLflow.
 - **Tests**: feature pipeline determinism, `classic.py` correctness against real fixtures (§7), `StratifiedGroupKFold` non-degeneracy regression test (§9).
 - **Baseline results** (`python -m valve_stiction_ml.train`, best params `n_estimators=200, min_samples_leaf=4, max_features='sqrt', max_depth=None`):
@@ -163,6 +163,7 @@ valve-stiction-ml/
     models.py                    (RF training, optional GBM baseline)
     evaluate.py                   (metrics, plots, cross-dataset test, sanity-check agreement reporting)
     train.py                      (CLI entrypoint, config-driven, writes model artifact)
+    inference.py                   (load a trained artifact, score one raw window)
   scripts/
     import_thesis_data.py          (one-off: copy + manifest thesis CSVs)
     label_windows.py                (milestone 3: classic detector -> window_labels.csv)
@@ -177,6 +178,7 @@ valve-stiction-ml/
     test_features.py
     test_evaluate.py
     test_models.py
+    test_inference.py
 ```
 
 ## 12. Milestones (reordered — classic detector now comes before any ML)
@@ -196,8 +198,8 @@ valve-stiction-ml/
 6. ✅ Sanity-check agreement (RF vs. old folder labels) reported in §10 — not the headline metric.
 7. ✅ Clustering sanity check (§10.1): KMeans/GMM on the same standardized features, check separation against classic-detector labels, report as a figure. Result: no separation (ARI ≈ 0) — a genuine, investigated caveat, not a clean pass. See §10.1 for what the dominant clustering axis turned out to be instead.
 8. Optional: gradient-boosting comparison.
-9. Correlation-based feature pruning pass; re-evaluate.
-10. Finalize model artifact format + inference-facing README.
+9. ✅ Correlation-based feature pruning — done as part of milestone 4 (§8), folded in rather than a separate later pass.
+10. ✅ Finalized model artifact format (`predict_threshold` added) + `inference.py` (`load_artifact`/`predict_window`, tested including a real end-to-end run against the trained model on a real SACAC window) + top-level README.md (setup, full pipeline reproduction commands, results, known limitations, inference usage).
 11. Later, once V1's simulator exists: same pipeline, new data source; `classic.py` can also be lifted directly into the PRD's real V1 service at that point.
 
 ## 13. Open items / risks

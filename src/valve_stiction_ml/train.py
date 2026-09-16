@@ -108,6 +108,7 @@ def main() -> None:
         "normalization": config["normalization"],
         "label_source": "classic_detector_v1",
         "classic_detector_threshold": config["classic_detector"]["ellipse_stiction_threshold"],
+        "predict_threshold": 0.5,
         "sklearn_version": sklearn.__version__,
         "git_commit_hash": git_hash,
         "best_params": search.best_params_,
