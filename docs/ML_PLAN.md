@@ -1,6 +1,6 @@
 # Valve Stiction ML Training — Plan
 
-Status: Draft v0.6 (milestone 4 done — features extracted, see §8, §12) · Scope: the V3 "bounded ML comparison" component of the [Valve Stiction Fault Detection — Distributed IoT Pipeline PRD](../../../Kuliah/Tugas%20Akhir/File%20TA/Github%20Tugas%20Akhir). This repo owns two things now, not one: a reference implementation of the unsupervised classic detector (needed as a label source, and reusable for the PRD's V1), and training/evaluation of the ML classifier that's meant to approximate it cheaply.
+Status: Draft v0.7 (milestone 5 done — RF baseline trained, see §9, §10, §12) · Scope: the V3 "bounded ML comparison" component of the [Valve Stiction Fault Detection — Distributed IoT Pipeline PRD](../../../Kuliah/Tugas%20Akhir/File%20TA/Github%20Tugas%20Akhir). This repo owns two things now, not one: a reference implementation of the unsupervised classic detector (needed as a label source, and reusable for the PRD's V1), and training/evaluation of the ML classifier that's meant to approximate it cheaply.
 
 **Note on "unsupervised":** we considered making clustering (KMeans/GMM) the primary modeling method instead of a classic-detector-taught RF. Rejected after brainstorming — see rationale in §10.1. Short version: clustering has no way to know your target concept (stiction specifically, vs. whatever axis of variation happens to dominate feature space), and grounding cluster identity credibly runs straight back into the same file-vs-window granularity problem that started this whole revision (§2). The classic detector is *already* unsupervised (zero training data, zero human labels) — it's just not clustering. Clustering is kept, but demoted to a validation/sanity-check role.
 
@@ -95,20 +95,34 @@ This also strengthens the portfolio story: *"I didn't trust my own thesis-era fi
 - **Performance**: calling tsfel once per window measured at ~1.4s/window (~55 minutes for this corpus). Fixed by normalizing each window independently, concatenating normalized windows back-to-back, and letting tsfel do its own internal windowing in one batched call per run — since every concatenated segment is exactly `window_size` samples, tsfel's internal split at the same size recovers identical boundaries, just ~125x faster (~11ms/window batched vs. ~1.4s per-window). Full corpus (2328 windows) extracts in under a minute.
 - **Results** (`scripts/extract_features.py` → `data/processed/features.csv`): 90 raw tsfel features (statistical + temporal, both PV and OP) pruned to 58 after correlation filtering (threshold 0.9). 96 of 2328 confident windows (4.1%) dropped for NaN features — **all 96 were "no"-labeled windows**, not a random sample: `derive_label`'s "no" case requires both detectors to agree there's minimal width/activity, which selects for the flattest, most near-constant windows — exactly where tsfel's skew/kurtosis calculations hit numerical instability (catastrophic cancellation on near-zero-variance signals). Expected given the definition, not a bug, but shifts the positive rate slightly (18.3% → 19.1%). Final dataset: 2232 windows (ISDB: 1203 no / 255 yes: SACAC: 602 no / 172 yes).
 
-## 9. Model selection
+## 9. Model selection — status: implemented, trained
 
 - **Primary**: `sklearn.ensemble.RandomForestClassifier`, trained against the classic detector's confident-agreement labels.
-- **Secondary comparison (optional)**: `HistGradientBoostingClassifier` (see §14 for why over LightGBM), same setup.
-- Hyperparameter search: small `RandomizedSearchCV`, scored on GroupKFold — never on SACAC.
-- Imbalance handling: `class_weight='balanced'` first; escalate only if needed. Note dropping "uncertain" windows (§7) may itself shift the class balance — recheck after that step, not before.
+- **Secondary comparison (optional)**: `HistGradientBoostingClassifier` (see §14 for why over LightGBM), same setup. Not yet run.
+- Hyperparameter search: `RandomizedSearchCV` (n_iter=30) over `n_estimators`/`max_depth`/`min_samples_leaf`/`max_features`, scored with `average_precision` (PR-AUC — threshold-independent, appropriate for ~18% positive rate) via `StratifiedGroupKFold` — never on SACAC.
+- Imbalance handling: `class_weight='balanced'`. Not escalated further — CV/test metrics below didn't show a need.
+- **Bug found and fixed**: plain `GroupKFold` (as originally planned) doesn't consider class labels at all. Checked on the real ISDB training data and found one fold with **zero** positive windows and two others with only 3–5, while two folds had 113+ each — positives are concentrated in a handful of the 77 ISDB loops. That makes per-fold precision/recall/PR-AUC meaningless for most folds and silently biases model selection toward whichever positive-heavy folds happen to dominate. Switched to `StratifiedGroupKFold` (same grouping guarantee, plus class balance across folds): 45–65 positives per fold on the same data. Regression-tested (`tests/test_models.py`) against a synthetic reproduction — including confirming the fix has a real mathematical limit: if positives live in fewer distinct groups than there are folds, *no* splitter can avoid empty folds (pigeonhole principle), so this only works because ISDB's positives, while concentrated, still span enough distinct loops.
 
-## 10. Evaluation & reproducibility
+## 10. Evaluation & reproducibility — status: baseline trained and evaluated
 
-- **Metrics reported**, computed against the classic-detector labels (the actual training target): precision, recall, F1, PR-AUC, ROC-AUC, confusion matrix, on GroupKFold-CV and on the untouched SACAC set.
-- **Reported separately, not as a training metric**: agreement rate between (a) classic detector's verdict and the old folder labels, (b) RF's verdict and the old folder labels — both framed as sanity checks, per §4.
-- **Model artifact**: joblib bundle with `{model, feature_names, window_size, normalization: "zscore-per-window", label_source: "classic_detector_v1", classic_detector_threshold, sklearn_version, git_commit_hash, train_metrics, test_metrics, trained_at}`.
-- **Versioning**: directory-based registry, `models/<date>_<git-short-hash>/`, no MLflow — matches the project's own scope discipline.
-- **Tests**: feature pipeline determinism, dataset loader leakage test (GroupKFold), and now also a `classic.py` correctness test against a handful of manually-inspected windows (visually confirmed stiction/no-stiction) — this is the one place a small amount of manual labeling is worth doing, as a unit test fixture, not as training data.
+- **Metrics reported**, computed against the classic-detector labels (the actual training target): precision, recall, F1, PR-AUC, ROC-AUC, confusion matrix, on StratifiedGroupKFold-CV and on the untouched SACAC set.
+- **Reported separately, not as a training metric**: agreement rate between (a) classic detector's verdict and the old folder labels (§7), (b) RF's verdict and the old folder labels — both framed as sanity checks, per §4.
+- **Model artifact**: joblib bundle with `{model, feature_names, window_size, normalization, label_source, classic_detector_threshold, sklearn_version, git_commit_hash, best_params, cv_metrics, cv_sanity_check_agreement, test_metrics, test_sanity_check_agreement, trained_at}` — self-describing, so a deployed model can't silently drift out of sync with what it was trained on (unlike the thesis's `subscribe.py`, where the feature list lived separately from the model file).
+- **Versioning**: directory-based registry, `models/<date>_<git-short-hash>/`, mirrored to `reports/<date>_<git-short-hash>.json` for the metrics alone — no MLflow.
+- **Tests**: feature pipeline determinism, `classic.py` correctness against real fixtures (§7), `StratifiedGroupKFold` non-degeneracy regression test (§9).
+- **Baseline results** (`python -m valve_stiction_ml.train`, best params `n_estimators=200, min_samples_leaf=4, max_features='sqrt', max_depth=None`):
+
+  | | ISDB (StratifiedGroupKFold CV) | SACAC (held-out test) |
+  |---|---|---|
+  | Precision | 0.728 | 0.858 |
+  | Recall | 0.827 | 0.529 |
+  | F1 | 0.774 | 0.655 |
+  | ROC-AUC | 0.944 | 0.860 |
+  | PR-AUC | 0.807 | 0.772 |
+  | Confusion (TN/FP/FN/TP) | 1124/79/44/211 | 587/15/81/91 |
+  | Sanity-check agreement with folder_label | 85.5% | 88.9% |
+
+  Precision and recall trade off differently between ISDB-CV and SACAC — SACAC has far fewer false positives (15 vs. proportionally more on ISDB) but misses more true positives (81 FN). That's a real, honestly-reported generalization gap between two independently-sourced benchmark corpora, consistent with what §3 already set as the expectation (this isn't a SOTA claim, and even the classic detector it's approximating isn't perfect ground truth). ROC-AUC/PR-AUC (threshold-independent) stayed reasonably strong on both (0.86/0.77 on SACAC), suggesting the 0.5 decision threshold — not the model's underlying discrimination — is what's driving the precision/recall trade-off shift; not re-tuned for this baseline.
 
 ### 10.1 Clustering as a sanity check (not a modeling method)
 
@@ -135,7 +149,7 @@ valve-stiction-ml/
       manifest.csv
   src/valve_stiction_ml/
     __init__.py
-    dataset.py                (loading, windowing, manifest, GroupKFold split)
+    dataset.py                (loading, windowing, manifest)
     classic.py                 (ellipse-fit + Kano detector — label source, reusable for PRD V1)
     features.py                 (per-window normalization + tsfel extraction)
     models.py                    (RF training, optional GBM baseline)
@@ -143,13 +157,18 @@ valve-stiction-ml/
     train.py                      (CLI entrypoint, config-driven, writes model artifact)
   scripts/
     import_thesis_data.py          (one-off: copy + manifest thesis CSVs)
+    label_windows.py                (milestone 3: classic detector -> window_labels.csv)
+    extract_features.py              (milestone 4: tsfel -> features.csv)
   models/                           (gitignored large artifacts, or git-lfs)
   reports/                           (generated per training run: metrics.json, plots)
   notebooks/                         (exploration only — never the source of truth)
   tests/
-    test_classic.py                  (fixture: a handful of manually-inspected windows)
-    test_features.py
     test_dataset.py
+    test_classic.py
+    test_classic_real_fixtures.py    (real SACAC-tagged files, skipped if data not imported)
+    test_features.py
+    test_evaluate.py
+    test_models.py
 ```
 
 ## 12. Milestones (reordered — classic detector now comes before any ML)
@@ -165,8 +184,8 @@ valve-stiction-ml/
 
    2328 confident windows total (1901 no / 427 yes, ~18.3% positive rate) survive for RF training. Sanity-check agreement with the old folder labels, on confident windows only, **not used to pick any parameter**: 86.8% overall (87.0% ISDB, 86.3% SACAC) — reassuring: where the new method is confident, it mostly agrees with the original file-level labels, and the difference is in correctly abstaining on ambiguous windows rather than blindly propagating a file's label to all of them. Checkpoint verdict: uncertain rate is substantial but not disqualifying — see §13.
 4. ✅ Preprocessing + tsfel feature pipeline, with tests. 90 raw features → 58 after correlation pruning; 2232 confident windows survive (see §8).
-5. Baseline RF trained against classic-detector labels: GroupKFold CV on ISDB, final untouched evaluation on SACAC.
-6. Report sanity-check agreement (RF vs. old folder labels) as a separate, clearly-labeled section — not the headline metric.
+5. ✅ Baseline RF trained against classic-detector labels: StratifiedGroupKFold CV on ISDB (fixed a real fold-degeneracy bug along the way, see §9), final untouched evaluation on SACAC. Results in §10.
+6. ✅ Sanity-check agreement (RF vs. old folder labels) reported in §10 — not the headline metric.
 7. Clustering sanity check (§10.1): KMeans/GMM on the same standardized features, check separation against classic-detector labels, report as a figure.
 8. Optional: gradient-boosting comparison.
 9. Correlation-based feature pruning pass; re-evaluate.
