@@ -12,6 +12,7 @@ Usage:
 
 from __future__ import annotations
 
+import argparse
 from pathlib import Path
 
 import numpy as np
@@ -28,8 +29,6 @@ from valve_stiction_ml.dataset import iter_windows, load_manifest, load_signal
 REPO_ROOT = Path(__file__).resolve().parents[1]
 RAW_DIR = REPO_ROOT / "data" / "raw"
 MANIFEST_PATH = REPO_ROOT / "data" / "processed" / "manifest.csv"
-OUT_PATH = REPO_ROOT / "data" / "processed" / "window_labels.csv"
-WINDOW_SIZE = 100
 MIN_RELATIVE_ACTIVITY = 0.15
 
 
@@ -94,11 +93,22 @@ def tune_ellipse_threshold(
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--window-size", type=int, default=100)
+    parser.add_argument(
+        "--out",
+        type=Path,
+        default=REPO_ROOT / "data" / "processed" / "window_labels.csv",
+    )
+    args = parser.parse_args()
+    out_path = args.out
+
     manifest = load_manifest(MANIFEST_PATH)
+    print(f"window_size={args.window_size}")
     print(f"Computing per-file reference OP std for {len(manifest)} files...")
     reference_std = compute_reference_op_std(manifest)
 
-    windows = iter_windows(manifest, RAW_DIR, WINDOW_SIZE)
+    windows = iter_windows(manifest, RAW_DIR, args.window_size)
     print(f"{len(windows)} total windows")
 
     ellipse_threshold = tune_ellipse_threshold(windows, reference_std)
@@ -127,9 +137,9 @@ def main() -> None:
         )
 
     result = pd.DataFrame(rows)
-    OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    result.to_csv(OUT_PATH, index=False)
-    print(f"Wrote {len(result)} rows to {OUT_PATH}")
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    result.to_csv(out_path, index=False)
+    print(f"Wrote {len(result)} rows to {out_path}")
 
     print("\n=== Label distribution by dataset ===")
     print(
