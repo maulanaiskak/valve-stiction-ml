@@ -1,6 +1,6 @@
 # Valve Stiction ML Training — Plan
 
-Status: Draft v0.7 (milestone 5 done — RF baseline trained, see §9, §10, §12) · Scope: the V3 "bounded ML comparison" component of the [Valve Stiction Fault Detection — Distributed IoT Pipeline PRD](../../../Kuliah/Tugas%20Akhir/File%20TA/Github%20Tugas%20Akhir). This repo owns two things now, not one: a reference implementation of the unsupervised classic detector (needed as a label source, and reusable for the PRD's V1), and training/evaluation of the ML classifier that's meant to approximate it cheaply.
+Status: Draft v0.8 (milestone 7 done — clustering sanity check, genuine caveat found, see §10.1) · Scope: the V3 "bounded ML comparison" component of the [Valve Stiction Fault Detection — Distributed IoT Pipeline PRD](../../../Kuliah/Tugas%20Akhir/File%20TA/Github%20Tugas%20Akhir). This repo owns two things now, not one: a reference implementation of the unsupervised classic detector (needed as a label source, and reusable for the PRD's V1), and training/evaluation of the ML classifier that's meant to approximate it cheaply.
 
 **Note on "unsupervised":** we considered making clustering (KMeans/GMM) the primary modeling method instead of a classic-detector-taught RF. Rejected after brainstorming — see rationale in §10.1. Short version: clustering has no way to know your target concept (stiction specifically, vs. whatever axis of variation happens to dominate feature space), and grounding cluster identity credibly runs straight back into the same file-vs-window granularity problem that started this whole revision (§2). The classic detector is *already* unsupervised (zero training data, zero human labels) — it's just not clustering. Clustering is kept, but demoted to a validation/sanity-check role.
 
@@ -124,14 +124,22 @@ This also strengthens the portfolio story: *"I didn't trust my own thesis-era fi
 
   Precision and recall trade off differently between ISDB-CV and SACAC — SACAC has far fewer false positives (15 vs. proportionally more on ISDB) but misses more true positives (81 FN). That's a real, honestly-reported generalization gap between two independently-sourced benchmark corpora, consistent with what §3 already set as the expectation (this isn't a SOTA claim, and even the classic detector it's approximating isn't perfect ground truth). ROC-AUC/PR-AUC (threshold-independent) stayed reasonably strong on both (0.86/0.77 on SACAC), suggesting the 0.5 decision threshold — not the model's underlying discrimination — is what's driving the precision/recall trade-off shift; not re-tuned for this baseline.
 
-### 10.1 Clustering as a sanity check (not a modeling method)
+### 10.1 Clustering as a sanity check (not a modeling method) — status: run, result is a genuine caveat, not a clean pass
 
-After the classic detector labels windows and the RF is trained, run KMeans or GMM (k=2) on the same standardized tsfel feature set, independent of any label. Then check: do the classic detector's "yes"/"no" windows fall into separate clusters, or are they mixed together?
+Ran KMeans and GMM (k=2) on the same standardized tsfel features used to train the RF (`scripts/cluster_sanity_check.py`), independent of any label, then checked whether the classic detector's yes/no windows fall into separate clusters.
 
-- **If they separate cleanly**: good evidence the tsfel features actually encode stiction-relevant structure — strengthens confidence in the whole feature pipeline, and is worth reporting as a figure (e.g. PCA-projected scatter colored by classic-detector label vs. by cluster assignment, side by side).
-- **If they don't separate**: a warning sign worth investigating before trusting the RF's learned decision boundary — either the features are missing something the classic detector is picking up on, or the classic detector's threshold is inconsistent with the dominant structure in the data. Either way, this is diagnostic information, not a reason to change what generates the training label.
+**They don't** — this came back as the "don't separate" case, not the hoped-for clean one:
 
-This step requires no extra label source (reuses the classic-detector output already computed), needs no cluster-naming/interpretation step, and is cheap to add once the pipeline runs end to end — a good fit for the "unsupervised ML" interest without taking on the risks discussed above.
+| | vs. `derived_label` (classic detector) | vs. `folder_label` (old thesis) | vs. `origin_dataset` |
+|---|---|---|---|
+| KMeans, Adjusted Rand Index | 0.005 | 0.039 | -0.001 |
+| GMM, Adjusted Rand Index | -0.079 | — | — |
+
+All close to 0 (chance-level); GMM is even slightly *below* chance. The PCA scatter (`reports/cluster_sanity_check.png`) confirms it visually — "yes" windows are scattered diffusely through the "no" cloud, no visible separation, while KMeans/GMM instead split the data along some other axis entirely.
+
+**Investigated why, rather than stopping at the number**: checked what that dominant axis actually correlates with. Not `origin_dataset` (ARI ≈ 0 — not an ISDB-vs-SACAC artifact). The top PC1 loadings are dominated by generic magnitude/spread features — `PV_Area under the curve`, `PV/OP_Peak to peak distance`, `PV/OP_Mean absolute deviation`, `PV/OP_Interquartile range` — i.e. "how much did this window move overall," not shape-specific stick-slip structure. That's consistent with everything else this investigation already found: `ellipse_stiction_index` (a general width/activity measure) is lenient and true ~91% of the time, while `kano_pattern_check` (the actual shape-specific test) fires on only ~17% — the stiction-relevant signal is a comparatively small, specific slice of the feature space's total variance, not its dominant axis. A k=2 unsupervised split naturally finds the *dominant* axis first, which here is generic activity level, not stiction shape.
+
+**What this means, honestly**: this is weaker evidence for the feature pipeline than hoped, but not a reason to distrust the RF result on its own. RF is supervised and nonlinear (many trees, entropy-based splits) — it can exploit a specific, lower-variance combination of features that a simple k=2 unsupervised split won't surface as the top axis, and its ROC-AUC/PR-AUC on held-out SACAC (0.86 / 0.77) show it found *something* real. But this check doesn't independently corroborate that finding the way a clean cluster separation would have. Documented as a genuine, moderate limitation for the writeup — not spun as either "fine" or "broken."
 
 ## 11. Project structure
 
@@ -186,7 +194,7 @@ valve-stiction-ml/
 4. ✅ Preprocessing + tsfel feature pipeline, with tests. 90 raw features → 58 after correlation pruning; 2232 confident windows survive (see §8).
 5. ✅ Baseline RF trained against classic-detector labels: StratifiedGroupKFold CV on ISDB (fixed a real fold-degeneracy bug along the way, see §9), final untouched evaluation on SACAC. Results in §10.
 6. ✅ Sanity-check agreement (RF vs. old folder labels) reported in §10 — not the headline metric.
-7. Clustering sanity check (§10.1): KMeans/GMM on the same standardized features, check separation against classic-detector labels, report as a figure.
+7. ✅ Clustering sanity check (§10.1): KMeans/GMM on the same standardized features, check separation against classic-detector labels, report as a figure. Result: no separation (ARI ≈ 0) — a genuine, investigated caveat, not a clean pass. See §10.1 for what the dominant clustering axis turned out to be instead.
 8. Optional: gradient-boosting comparison.
 9. Correlation-based feature pruning pass; re-evaluate.
 10. Finalize model artifact format + inference-facing README.
