@@ -152,8 +152,12 @@ def main() -> None:
     ))
 
     print("\n=== Sanity check: derived_label vs old folder_label ===")
-    print("(agreement computed only on non-uncertain windows)")
-    confident = result[result["derived_label"] != "uncertain"]
+    print("(agreement computed only on non-uncertain windows with a known folder_label --")
+    print(" 'unknown' folder_label windows, e.g. SACAC's own undetermined-root-cause files,")
+    print(" have nothing to compare against and are excluded, not counted as disagreement)")
+    confident = result[
+        (result["derived_label"] != "uncertain") & (result["folder_label"] != "unknown")
+    ]
     agree = (confident["derived_label"] == confident["folder_label"]).mean()
     print(f"Overall agreement: {agree:.3f} ({len(confident)} confident windows)")
     for dataset, group in confident.groupby("origin_dataset"):

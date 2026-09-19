@@ -35,6 +35,13 @@ def compute_metrics(y_true: np.ndarray, y_pred: np.ndarray, y_proba: np.ndarray)
 def sanity_check_agreement(y_pred_label: np.ndarray, folder_label: np.ndarray) -> dict:
     """Agreement between a "yes"/"no" prediction and the old thesis folder
     labels. Reported only -- never used to pick a model or hyperparameter,
-    per ML_PLAN.md §2, §4."""
-    agree = (y_pred_label == folder_label).mean()
-    return {"agreement_with_folder_label": float(agree), "n_samples": int(len(y_pred_label))}
+    per ML_PLAN.md §2, §4.
+
+    Excludes folder_label == "unknown" (e.g. SACAC's own files where the
+    original researchers couldn't determine a root cause either) -- there's
+    nothing to compare against there, and counting it as a mismatch would
+    understate the agreement rate for no real reason.
+    """
+    known = folder_label != "unknown"
+    agree = (y_pred_label[known] == folder_label[known]).mean()
+    return {"agreement_with_folder_label": float(agree), "n_samples": int(known.sum())}

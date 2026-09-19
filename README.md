@@ -28,6 +28,11 @@ Each step writes to `data/processed/` or `models/`/`reports/` (all gitignored �
 # 1. Copy thesis CSVs into data/raw/, build data/processed/manifest.csv
 python scripts/import_thesis_data.py
 
+# 1b. Optional: pull in SACAC files present on the official portal
+#     (sacac.org.za) but missing from the thesis repo's copy -- see the
+#     script's docstring for which ones are actually usable and why
+python scripts/download_additional_sacac.py
+
 # 2. Run the classic detector (ellipse-fit + Kano) over every window,
 #    tune ellipse_threshold on ISDB only -> data/processed/window_labels.csv
 python scripts/label_windows.py
@@ -64,11 +69,11 @@ result = predict_window(artifact, pv_window, op_window)  # raw, non-normalized a
 
 |  | ISDB (StratifiedGroupKFold CV) | SACAC (held-out test) |
 |---|---|---|
-| Precision | 0.728 | 0.858 |
-| Recall | 0.827 | 0.529 |
-| F1 | 0.774 | 0.655 |
-| ROC-AUC | 0.944 | 0.860 |
-| PR-AUC | 0.807 | 0.772 |
+| Precision | 0.733 | 0.866 |
+| Recall | 0.839 | 0.522 |
+| F1 | 0.782 | 0.651 |
+| ROC-AUC | 0.944 | 0.865 |
+| PR-AUC | 0.809 | 0.788 |
 
 Read as: *does a cheap RF approximate the classic detector well* — not *does this detect real-world stiction with X% accuracy*. Precision/recall trade off differently between ISDB and SACAC (SACAC: fewer false positives, more misses) — an honest generalization gap between two independently-sourced benchmark corpora, not hidden or averaged away.
 

@@ -13,6 +13,7 @@ dependencies = [
     "joblib",
     "pyyaml",
     "matplotlib",
+    "requests",
 ]
 
 [project.optional-dependencies]

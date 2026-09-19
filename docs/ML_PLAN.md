@@ -1,6 +1,6 @@
 # Valve Stiction ML Training — Plan
 
-Status: v1.0 (milestones 1-10 complete — pipeline, RF baseline, and inference-facing README finalized; only the optional gradient-boosting comparison and the PRD's future simulator integration remain, see §12) · Scope: the V3 "bounded ML comparison" component of the [Valve Stiction Fault Detection — Distributed IoT Pipeline PRD](../../../Kuliah/Tugas%20Akhir/File%20TA/Github%20Tugas%20Akhir). This repo owns two things now, not one: a reference implementation of the unsupervised classic detector (needed as a label source, and reusable for the PRD's V1), and training/evaluation of the ML classifier that's meant to approximate it cheaply.
+Status: v1.1 (added 6 verified additional SACAC files from the official portal, see §4.1; milestones 1-10 complete — only the optional gradient-boosting comparison and the PRD's future simulator integration remain, see §12) · Scope: the V3 "bounded ML comparison" component of the [Valve Stiction Fault Detection — Distributed IoT Pipeline PRD](../../../Kuliah/Tugas%20Akhir/File%20TA/Github%20Tugas%20Akhir). This repo owns two things now, not one: a reference implementation of the unsupervised classic detector (needed as a label source, and reusable for the PRD's V1), and training/evaluation of the ML classifier that's meant to approximate it cheaply.
 
 **Note on "unsupervised":** we considered making clustering (KMeans/GMM) the primary modeling method instead of a classic-detector-taught RF. Rejected after brainstorming — see rationale in §10.1. Short version: clustering has no way to know your target concept (stiction specifically, vs. whatever axis of variation happens to dominate feature space), and grounding cluster identity credibly runs straight back into the same file-vs-window granularity problem that started this whole revision (§2). The classic detector is *already* unsupervised (zero training data, zero human labels) — it's just not clustering. Clustering is kept, but demoted to a validation/sanity-check role.
 
@@ -59,6 +59,19 @@ The old yes/no folder labels are demoted to a **sanity cross-check only**: after
 
 This also strengthens the portfolio story: *"I didn't trust my own thesis-era file-level labels, so I implemented an established unsupervised detector as ground truth and used ML only to approximate it cheaply, with metrics reported against both."* That's a stronger, more defensible narrative than presenting old supervised numbers at face value.
 
+## 4.1 Additional data — checked the official sources, imported what was usable
+
+Went looking for more/other public stiction datasets. Checked directly against the official portals rather than trusting search-result summaries at face value (one summary claimed a "sacac.org.za" URL for our SACAC data, which looked at first like a mismatched result — turned out to be correct: SACAC is literally the *South African Council for Automation and Control*, and that's its real official host).
+
+- **ISDB** (Jelali & Huang, University of Alberta): no public download link found — likely distributed via their book or on request. No evidence our 77-file copy is missing anything readily obtainable.
+- **SACAC** (sacac.org.za/resources): diffed the portal's file listing against what's in this repo — **10 files were missing**. Downloaded and inspected each before importing anything:
+  - 3 `plantwide-*` files: **not usable** — multi-tag, semicolon+comma-decimal format (temperature/level indicators across a whole plant, e.g. `TI1;TI2;TI3;...`), no clear single PV/OP pair to extract without domain documentation we don't have.
+  - `quantisation-T-chemicals-Thornhill-2003.csv`: **not usable** — PV only, no OP column.
+  - 6 `unknown-*` files: **usable** — real PV/OP columns (semicolon-delimited on the portal, normalized to this repo's comma convention on import), just a different delimiter. `folder_label="unknown"` for these — the original researchers couldn't determine a root cause either, so these are never forced into yes/no, same treatment as everything else (`scripts/download_additional_sacac.py`).
+- **DAMADICS** (real actuator-fault benchmark, sugar factory evaporation station) and **GIMSCOP/UFRGS** (Brazilian oil & gas SISO loops + a synthetic oscillation dataset): both real, verified leads, **not integrated** — different domain/format, would need a real adapter, and the marginal value for this project's scope didn't seem to justify it. Documented here in case that changes later.
+- **Result**: 6 new files → 153 new SACAC windows (14 confident "yes", 1 confident "no", 138 "uncertain" — a notably higher uncertain rate than SACAC's overall 49%, which lines up with these being exactly the files the original researchers themselves couldn't root-cause; not over-claiming a strong conclusion from 6 files, but a nice bit of unplanned corroboration for the detector's conservatism). Retrained: SACAC ROC-AUC 0.860→0.865, PR-AUC 0.772→0.788, everything else essentially stable — a real but modest improvement, not a step change.
+- **Bug caught while wiring this in**: `sanity_check_agreement` (`evaluate.py`) compared predictions against `folder_label` with no exclusion — `"unknown"` rows would never match a "yes"/"no" prediction and were silently counted as disagreements, understating the agreement rate for no real reason. Fixed to exclude `folder_label == "unknown"` from the comparison entirely (both there and in `label_windows.py`'s sanity-check print), with a regression test.
+
 ## 5. Data strategy
 
 - **Source**: `Data/Data Latih ISDB/{yes,no}/*.csv` (train) and `Data/Data Validasi SACAC/{yes,no}/*.csv` (held-out test) from the thesis repo, copied in via `scripts/import_thesis_data.py`. Old folder labels are still imported — as the sanity-check signal from §4, not as training targets.
@@ -110,19 +123,19 @@ This also strengthens the portfolio story: *"I didn't trust my own thesis-era fi
 - **Model artifact**: joblib bundle with `{model, feature_names, window_size, normalization, label_source, classic_detector_threshold, predict_threshold, sklearn_version, git_commit_hash, best_params, cv_metrics, cv_sanity_check_agreement, test_metrics, test_sanity_check_agreement, trained_at}` — self-describing, so a deployed model can't silently drift out of sync with what it was trained on (unlike the thesis's `subscribe.py`, where the feature list lived separately from the model file). `inference.py`'s `load_artifact`/`predict_window` is the one sanctioned way to consume it — raw window in, `{"label", "probability"}` out, re-deriving normalization and feature selection internally rather than trusting a caller to get that order right.
 - **Versioning**: directory-based registry, `models/<date>_<git-short-hash>/`, mirrored to `reports/<date>_<git-short-hash>.json` for the metrics alone — no MLflow.
 - **Tests**: feature pipeline determinism, `classic.py` correctness against real fixtures (§7), `StratifiedGroupKFold` non-degeneracy regression test (§9).
-- **Baseline results** (`python -m valve_stiction_ml.train`, best params `n_estimators=200, min_samples_leaf=4, max_features='sqrt', max_depth=None`):
+- **Baseline results** (`python -m valve_stiction_ml.train`, best params `n_estimators=300, min_samples_leaf=4, max_features='sqrt', max_depth=20`; after §4.1's SACAC additions):
 
   | | ISDB (StratifiedGroupKFold CV) | SACAC (held-out test) |
   |---|---|---|
-  | Precision | 0.728 | 0.858 |
-  | Recall | 0.827 | 0.529 |
-  | F1 | 0.774 | 0.655 |
-  | ROC-AUC | 0.944 | 0.860 |
-  | PR-AUC | 0.807 | 0.772 |
-  | Confusion (TN/FP/FN/TP) | 1124/79/44/211 | 587/15/81/91 |
-  | Sanity-check agreement with folder_label | 85.5% | 88.9% |
+  | Precision | 0.733 | 0.866 |
+  | Recall | 0.839 | 0.522 |
+  | F1 | 0.782 | 0.651 |
+  | ROC-AUC | 0.944 | 0.865 |
+  | PR-AUC | 0.809 | 0.788 |
+  | Confusion (TN/FP/FN/TP) | 1125/78/41/214 | 588/15/89/97 |
+  | Sanity-check agreement with folder_label | 85.5% | 89.0% |
 
-  Precision and recall trade off differently between ISDB-CV and SACAC — SACAC has far fewer false positives (15 vs. proportionally more on ISDB) but misses more true positives (81 FN). That's a real, honestly-reported generalization gap between two independently-sourced benchmark corpora, consistent with what §3 already set as the expectation (this isn't a SOTA claim, and even the classic detector it's approximating isn't perfect ground truth). ROC-AUC/PR-AUC (threshold-independent) stayed reasonably strong on both (0.86/0.77 on SACAC), suggesting the 0.5 decision threshold — not the model's underlying discrimination — is what's driving the precision/recall trade-off shift; not re-tuned for this baseline.
+  Precision and recall trade off differently between ISDB-CV and SACAC — SACAC has far fewer false positives (15) but misses more true positives (89 FN). That's a real, honestly-reported generalization gap between two independently-sourced benchmark corpora, consistent with what §3 already set as the expectation (this isn't a SOTA claim, and even the classic detector it's approximating isn't perfect ground truth). ROC-AUC/PR-AUC (threshold-independent) stayed reasonably strong on both (0.865/0.788 on SACAC), suggesting the 0.5 decision threshold — not the model's underlying discrimination — is what's driving the precision/recall trade-off shift; not re-tuned for this baseline. (Before the §4.1 SACAC additions: 0.860/0.772 — the extra data moved things slightly, not dramatically, which is the honest expectation for +15 net confident windows on a ~774-window test set.)
 
 ### 10.1 Clustering as a sanity check (not a modeling method) — status: run, result is a genuine caveat, not a clean pass
 
@@ -166,8 +179,9 @@ valve-stiction-ml/
     inference.py                   (load a trained artifact, score one raw window)
   scripts/
     import_thesis_data.py          (one-off: copy + manifest thesis CSVs)
-    label_windows.py                (milestone 3: classic detector -> window_labels.csv)
-    extract_features.py              (milestone 4: tsfel -> features.csv)
+    download_additional_sacac.py    (one-off: pull in official-portal SACAC files missing from the thesis copy, see §4.1)
+    label_windows.py                  (milestone 3: classic detector -> window_labels.csv)
+    extract_features.py                (milestone 4: tsfel -> features.csv)
   models/                           (gitignored large artifacts, or git-lfs)
   reports/                           (generated per training run: metrics.json, plots)
   notebooks/                         (exploration only — never the source of truth)

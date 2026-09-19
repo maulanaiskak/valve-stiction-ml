@@ -40,3 +40,16 @@ def test_sanity_check_agreement():
 
     assert result["agreement_with_folder_label"] == 0.75
     assert result["n_samples"] == 4
+
+
+def test_sanity_check_agreement_excludes_unknown_folder_label():
+    # "unknown" folder_label (e.g. SACAC files the original researchers
+    # couldn't root-cause either) has nothing to compare against -- must
+    # not be counted as a mismatch.
+    pred = np.array(["yes", "no", "yes", "no"])
+    folder = np.array(["yes", "unknown", "unknown", "no"])
+
+    result = sanity_check_agreement(pred, folder)
+
+    assert result["agreement_with_folder_label"] == 1.0
+    assert result["n_samples"] == 2
