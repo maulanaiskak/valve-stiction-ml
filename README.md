@@ -77,6 +77,10 @@ result = predict_window(artifact, pv_window, op_window)  # raw, non-normalized a
 
 Read as: *does a cheap RF approximate the classic detector well* — not *does this detect real-world stiction with X% accuracy*. Precision/recall trade off differently between ISDB and SACAC (SACAC: fewer false positives, more misses) — an honest generalization gap between two independently-sourced benchmark corpora, not hidden or averaged away.
 
+Two things were investigated and *not* applied, on evidence, not assumption:
+- **Gradient-boosting comparison**: `HistGradientBoostingClassifier` beats RF on ISDB's internal CV but loses clearly on SACAC (PR-AUC 0.745 vs. 0.788, F1 0.608 vs. 0.651) — RF stays primary, now backed by a real comparison rather than an unexamined default.
+- **Decision-threshold tuning**: the F1-maximizing threshold found on ISDB alone (0.515) scored *worse* on SACAC than the plain 0.5 default (F1 0.628 vs. 0.651) — kept 0.5.
+
 ## Known limitations (see ML_PLAN.md for full detail)
 
 - **~45-49% of windows are "uncertain"** and excluded from training — the classic detector's two components (ellipse-fit, Kano) are conservative by design and don't always agree. Investigated and kept this way deliberately (§13).

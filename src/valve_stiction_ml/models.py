@@ -1,4 +1,5 @@
-"""RF training via RandomizedSearchCV + StratifiedGroupKFold, scored on ISDB only.
+"""RF (primary) + HistGradientBoostingClassifier (secondary comparison) via
+RandomizedSearchCV + StratifiedGroupKFold, scored on ISDB only.
 
 See docs/ML_PLAN.md §9. class_weight='balanced' handles the ~19% positive
 rate; scoring is average_precision (PR-AUC) rather than accuracy or a
@@ -9,7 +10,7 @@ imbalanced data -- matches ML_PLAN.md §10's "never accuracy alone".
 from __future__ import annotations
 
 import numpy as np
-from sklearn.ensemble import RandomForestClassifier
+from sklearn.ensemble import HistGradientBoostingClassifier, RandomForestClassifier
 from sklearn.model_selection import RandomizedSearchCV, StratifiedGroupKFold
 
 RF_PARAM_DISTRIBUTIONS = {
@@ -17,6 +18,14 @@ RF_PARAM_DISTRIBUTIONS = {
     "max_depth": [None, 5, 10, 20],
     "min_samples_leaf": [1, 2, 4, 8],
     "max_features": ["sqrt", "log2", 0.5],
+}
+
+GBM_PARAM_DISTRIBUTIONS = {
+    "max_iter": [100, 200, 300],
+    "max_depth": [None, 3, 5, 10],
+    "learning_rate": [0.01, 0.05, 0.1, 0.2],
+    "min_samples_leaf": [5, 10, 20, 30],
+    "l2_regularization": [0.0, 0.1, 1.0],
 }
 
 
@@ -48,6 +57,37 @@ def train_random_forest(
     search = RandomizedSearchCV(
         base,
         RF_PARAM_DISTRIBUTIONS,
+        n_iter=n_iter,
+        scoring="average_precision",
+        cv=cv,
+        random_state=random_state,
+        refit=True,
+        n_jobs=-1,
+    )
+    search.fit(X, y, groups=groups)
+    return search
+
+
+def train_gbm(
+    X: np.ndarray,
+    y: np.ndarray,
+    groups: np.ndarray,
+    n_splits: int = 5,
+    n_iter: int = 30,
+    random_state: int = 42,
+) -> RandomizedSearchCV:
+    """Optional secondary comparison (ML_PLAN.md §9, §14 -- chosen over
+    LightGBM specifically to avoid adding a dependency for a nice-to-have).
+    Same StratifiedGroupKFold discipline as train_random_forest.
+    """
+    base = HistGradientBoostingClassifier(
+        class_weight="balanced", random_state=random_state
+    )
+    cv = StratifiedGroupKFold(n_splits=n_splits, shuffle=True, random_state=random_state)
+
+    search = RandomizedSearchCV(
+        base,
+        GBM_PARAM_DISTRIBUTIONS,
         n_iter=n_iter,
         scoring="average_precision",
         cv=cv,

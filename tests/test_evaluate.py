@@ -1,6 +1,11 @@
 import numpy as np
+import pytest
 
-from valve_stiction_ml.evaluate import compute_metrics, sanity_check_agreement
+from valve_stiction_ml.evaluate import (
+    compute_metrics,
+    find_best_threshold,
+    sanity_check_agreement,
+)
 
 
 def test_compute_metrics_perfect_prediction():
@@ -53,3 +58,20 @@ def test_sanity_check_agreement_excludes_unknown_folder_label():
 
     assert result["agreement_with_folder_label"] == 1.0
     assert result["n_samples"] == 2
+
+
+def test_find_best_threshold_recovers_clean_separation():
+    # proba clearly separates at 0.5; a low threshold should recall
+    # everything but hurt precision, so f1 should peak near the true gap
+    y_true = np.array([0, 0, 0, 1, 1, 1])
+    y_proba = np.array([0.1, 0.2, 0.3, 0.7, 0.8, 0.9])
+
+    threshold = find_best_threshold(y_true, y_proba)
+
+    preds = (y_proba >= threshold).astype(int)
+    np.testing.assert_array_equal(preds, y_true)
+
+
+def test_find_best_threshold_rejects_unsupported_metric():
+    with pytest.raises(ValueError):
+        find_best_threshold(np.array([0, 1]), np.array([0.2, 0.8]), metric="accuracy")

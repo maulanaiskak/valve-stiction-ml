@@ -17,6 +17,28 @@ from sklearn.metrics import (
 )
 
 
+def find_best_threshold(
+    y_true: np.ndarray, y_proba: np.ndarray, metric: str = "f1"
+) -> float:
+    """Search a fine grid of thresholds for the one maximizing `metric` on
+    the given predictions.
+
+    Only ever call this with ISDB out-of-fold predictions -- SACAC must
+    stay untouched by any tuning, per ML_PLAN.md §5, same discipline as
+    ellipse_threshold in classic.py.
+    """
+    if metric != "f1":
+        raise ValueError("only 'f1' is implemented")
+
+    candidates = np.linspace(0.01, 0.99, 197)
+    best_threshold, best_score = 0.5, -1.0
+    for t in candidates:
+        score = f1_score(y_true, (y_proba >= t).astype(int), zero_division=0)
+        if score > best_score:
+            best_threshold, best_score = float(t), float(score)
+    return best_threshold
+
+
 def compute_metrics(y_true: np.ndarray, y_pred: np.ndarray, y_proba: np.ndarray) -> dict:
     """y_pred is the thresholded (0.5) prediction; y_proba is P(positive)."""
     tn, fp, fn, tp = confusion_matrix(y_true, y_pred, labels=[0, 1]).ravel()

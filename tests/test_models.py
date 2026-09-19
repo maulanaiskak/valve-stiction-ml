@@ -1,7 +1,7 @@
 import numpy as np
 from sklearn.model_selection import StratifiedGroupKFold
 
-from valve_stiction_ml.models import train_random_forest
+from valve_stiction_ml.models import train_gbm, train_random_forest
 
 
 def test_train_random_forest_returns_fitted_usable_model():
@@ -47,3 +47,19 @@ def test_train_random_forest_uses_stratified_splits_not_degenerate():
             assert y[val_idx].sum() > 0, (
                 f"seed={seed}: a fold with zero positives is what broke this"
             )
+
+
+def test_train_gbm_returns_fitted_usable_model():
+    rng = np.random.default_rng(0)
+    n = 120
+    X = rng.normal(0, 1, (n, 5))
+    y = (X[:, 0] + rng.normal(0, 0.5, n) > 0).astype(int)
+    groups = np.repeat(np.arange(20), 6)
+
+    search = train_gbm(X, y, groups, n_splits=4, n_iter=3, random_state=0)
+
+    assert hasattr(search, "best_estimator_")
+    preds = search.predict(X)
+    assert preds.shape == (n,)
+    proba = search.predict_proba(X)
+    assert proba.shape == (n, 2)
