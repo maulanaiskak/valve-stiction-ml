@@ -21,6 +21,7 @@ import sklearn
 import yaml
 from sklearn.model_selection import StratifiedGroupKFold, cross_val_predict
 
+from valve_stiction_ml.dataset import cap_windows_per_loop
 from valve_stiction_ml.evaluate import compute_metrics, sanity_check_agreement
 from valve_stiction_ml.models import train_random_forest
 
@@ -48,18 +49,26 @@ def main() -> None:
     df = pd.read_csv(FEATURES_PATH)
     feature_names = [c for c in df.columns if c not in METADATA_COLUMNS]
 
-    y = (df["derived_label"] == "yes").astype(int).to_numpy()
-    X = df[feature_names].to_numpy()
+    isdb_df = df[df["origin_dataset"] == "ISDB"].reset_index(drop=True)
+    sacac_df = df[df["origin_dataset"] != "ISDB"].reset_index(drop=True)
 
-    isdb_mask = (df["origin_dataset"] == "ISDB").to_numpy()
-    sacac_mask = ~isdb_mask
+    max_per_loop = config.get("training", {}).get("max_windows_per_loop")
+    if max_per_loop:
+        before = len(isdb_df)
+        isdb_df = cap_windows_per_loop(isdb_df, max_per_loop)
+        print(
+            f"Capped ISDB windows at {max_per_loop}/loop: {before} -> {len(isdb_df)} windows "
+            "(training-data representativeness fix, see configs/default.yaml)"
+        )
 
-    X_train, y_train = X[isdb_mask], y[isdb_mask]
-    groups_train = df.loc[isdb_mask, "loop_id"].to_numpy()
-    folder_train = df.loc[isdb_mask, "folder_label"].to_numpy()
+    X_train = isdb_df[feature_names].to_numpy()
+    y_train = (isdb_df["derived_label"] == "yes").astype(int).to_numpy()
+    groups_train = isdb_df["loop_id"].to_numpy()
+    folder_train = isdb_df["folder_label"].to_numpy()
 
-    X_test, y_test = X[sacac_mask], y[sacac_mask]
-    folder_test = df.loc[sacac_mask, "folder_label"].to_numpy()
+    X_test = sacac_df[feature_names].to_numpy()
+    y_test = (sacac_df["derived_label"] == "yes").astype(int).to_numpy()
+    folder_test = sacac_df["folder_label"].to_numpy()
 
     print(f"Training on {len(X_train)} ISDB windows, testing on {len(X_test)} SACAC windows")
     print(f"ISDB positive rate: {y_train.mean():.3f}  SACAC positive rate: {y_test.mean():.3f}")
@@ -107,6 +116,7 @@ def main() -> None:
         "window_size": config["window"]["size"],
         "normalization": config["normalization"],
         "label_source": "classic_detector_v1",
+        "max_windows_per_loop": max_per_loop,
         "classic_detector_threshold": config["classic_detector"]["ellipse_stiction_threshold"],
         "predict_threshold": 0.5,
         "sklearn_version": sklearn.__version__,

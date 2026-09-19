@@ -91,3 +91,30 @@ def iter_windows(
 
 def load_manifest(manifest_path: Path) -> pd.DataFrame:
     return pd.read_csv(manifest_path)
+
+
+def cap_windows_per_loop(
+    df: pd.DataFrame,
+    max_per_loop: int,
+    loop_column: str = "loop_id",
+    random_state: int = 42,
+) -> pd.DataFrame:
+    """Randomly subsample each loop down to at most max_per_loop rows.
+
+    File lengths in this corpus range from 200 to 42,512 samples, so
+    fixed-size non-overlapping windowing produces wildly uneven per-loop
+    window counts -- checked on the real ISDB training set and found the
+    top 5 of 60 loops contribute 72% of all windows (top 3 alone, all from
+    the same "BAS" source, contribute 62%). GroupKFold/StratifiedGroupKFold
+    already prevent this from leaking across train/test, but it's still a
+    real training-data representativeness problem: the model could
+    disproportionately learn whatever those specific loops look like
+    rather than a generalizable pattern. This caps that influence without
+    dropping any loop entirely.
+    """
+    rng = np.random.default_rng(random_state)
+    keep_indices: list = []
+    for _, group in df.groupby(loop_column):
+        n = min(len(group), max_per_loop)
+        keep_indices.extend(rng.choice(group.index.to_numpy(), size=n, replace=False))
+    return df.loc[keep_indices].reset_index(drop=True)

@@ -35,3 +35,28 @@ random_forest:
 cross_validation:
   n_splits: 5
   group_column: loop_id
+
+training:
+  # Checked on the real ISDB training set: top 5 of 60 loops contributed
+  # 72% of all windows (top 3, all "BAS", contributed 62%) under fixed
+  # non-overlapping windowing on wildly varying file lengths (200-42512
+  # samples). GroupKFold/StratifiedGroupKFold prevent this leaking across
+  # train/test, but not the training-data representativeness problem this
+  # causes in principle.
+  #
+  # Tried fixing it with cap_windows_per_loop (dataset.py) at several caps
+  # (30/50/100/150) and compared against no cap on the real held-out SACAC
+  # test. Every capped variant scored *worse* than no cap at all (best
+  # capped ROC-AUC/PR-AUC: 0.859/0.765 at cap=150; uncapped: 0.865/0.788).
+  # Likely why: this dataset is already small, so discarding up to 63% of
+  # ISDB's windows (cap=30) costs more than the representativeness fix
+  # gains -- and the dominant loops are all "no", so capping them hard also
+  # pushes the training positive rate to 40% versus SACAC's actual 23.6%,
+  # moving the training distribution further from the test distribution's
+  # real class balance, not closer.
+  #
+  # Decision: keep this disabled (null). The function stays available and
+  # tested (tests/test_dataset_capping.py) since the underlying concern is
+  # real, just not worth this fix on this dataset -- revisit if the
+  # dataset grows enough that losing volume stops being the dominant cost.
+  max_windows_per_loop: null
