@@ -9,6 +9,7 @@ Usage:
 
 from __future__ import annotations
 
+import argparse
 import json
 import subprocess
 from datetime import datetime, timezone
@@ -27,6 +28,8 @@ from valve_stiction_ml.models import train_gbm, train_random_forest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 FEATURES_PATH = REPO_ROOT / "data" / "processed" / "features.csv"
+SYNTHETIC_TRAIN_PATH = REPO_ROOT / "data" / "processed" / "synthetic_train_features.csv"
+SYNTHETIC_HELDOUT_PATH = REPO_ROOT / "data" / "processed" / "synthetic_heldout_features.csv"
 CONFIG_PATH = REPO_ROOT / "configs" / "default.yaml"
 MODELS_DIR = REPO_ROOT / "models"
 REPORTS_DIR = REPO_ROOT / "reports"
@@ -92,6 +95,19 @@ def evaluate_search(
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--include-synthetic",
+        action="store_true",
+        help=(
+            "Add synthetic_train_features.csv (domain-randomized valve-stiction-simulator-"
+            "style windows, exact ground truth) to the ISDB training set. See synthetic.py "
+            "and build_synthetic_features.py for why. SACAC stays the untouched real test "
+            "set either way; synthetic_heldout_features.csv is always reported separately."
+        ),
+    )
+    args = parser.parse_args()
+
     config = yaml.safe_load(CONFIG_PATH.read_text())
     df = pd.read_csv(FEATURES_PATH)
     feature_names = [c for c in df.columns if c not in METADATA_COLUMNS]
@@ -108,17 +124,27 @@ def main() -> None:
             "(training-data representativeness fix, see configs/default.yaml)"
         )
 
-    X_train = isdb_df[feature_names].to_numpy()
-    y_train = (isdb_df["derived_label"] == "yes").astype(int).to_numpy()
-    groups_train = isdb_df["loop_id"].to_numpy()
-    folder_train = isdb_df["folder_label"].to_numpy()
+    train_df = isdb_df
+    if args.include_synthetic:
+        synth_train_df = pd.read_csv(SYNTHETIC_TRAIN_PATH)
+        train_df = pd.concat([isdb_df, synth_train_df], ignore_index=True)
+        print(
+            f"--include-synthetic: added {len(synth_train_df)} synthetic windows "
+            f"({synth_train_df['loop_id'].nunique()} configs) to the {len(isdb_df)}-window "
+            "ISDB training set"
+        )
+
+    X_train = train_df[feature_names].to_numpy()
+    y_train = (train_df["derived_label"] == "yes").astype(int).to_numpy()
+    groups_train = train_df["loop_id"].to_numpy()
+    folder_train = train_df["folder_label"].to_numpy()
 
     X_test = sacac_df[feature_names].to_numpy()
     y_test = (sacac_df["derived_label"] == "yes").astype(int).to_numpy()
     folder_test = sacac_df["folder_label"].to_numpy()
 
-    print(f"Training on {len(X_train)} ISDB windows, testing on {len(X_test)} SACAC windows")
-    print(f"ISDB positive rate: {y_train.mean():.3f}  SACAC positive rate: {y_test.mean():.3f}")
+    print(f"Training on {len(X_train)} windows, testing on {len(X_test)} SACAC windows")
+    print(f"Train positive rate: {y_train.mean():.3f}  SACAC positive rate: {y_test.mean():.3f}")
 
     n_splits = config["cross_validation"]["n_splits"]
     eval_args = (X_train, y_train, groups_train, folder_train, X_test, y_test, folder_test)
@@ -157,6 +183,21 @@ def main() -> None:
     # rf_search.best_estimator_ was refit on all of X_train/y_train (refit=True)
     final_model = rf_search.best_estimator_
 
+    # Always reported, whether or not --include-synthetic was used -- this
+    # is the number that actually answers "does the model work against a
+    # live streaming signal", which SACAC (real, but not a stream) can't
+    # answer. Never trained on, exactly like SACAC.
+    synthetic_heldout_metrics = None
+    if SYNTHETIC_HELDOUT_PATH.exists():
+        heldout_df = pd.read_csv(SYNTHETIC_HELDOUT_PATH)
+        X_heldout = heldout_df[feature_names].to_numpy()
+        y_heldout = (heldout_df["derived_label"] == "yes").astype(int).to_numpy()
+        heldout_proba = final_model.predict_proba(X_heldout)[:, 1]
+        heldout_pred = (heldout_proba >= 0.5).astype(int)
+        synthetic_heldout_metrics = compute_metrics(y_heldout, heldout_pred, heldout_proba)
+        print(f"\nSynthetic held-out set ({len(X_heldout)} windows, never trained on):")
+        print(f"  {synthetic_heldout_metrics}")
+
     trained_at = datetime.now(timezone.utc).isoformat()
     git_hash = git_short_hash()
     artifact = {
@@ -167,23 +208,34 @@ def main() -> None:
         "label_source": "classic_detector_v1",
         "max_windows_per_loop": max_per_loop,
         "classic_detector_threshold": config["classic_detector"]["ellipse_stiction_threshold"],
-        # Tried tuning this: found the F1-maximizing threshold on ISDB
-        # out-of-fold predictions only (0.515, barely different from 0.5),
-        # then checked it against SACAC -- it scored *worse* there (F1
-        # 0.628 vs 0.651 at 0.5). class_weight='balanced' already keeps RF
-        # reasonably calibrated near 0.5, and a threshold tuned on ISDB's
-        # class balance doesn't transfer cleanly to SACAC's different one
-        # (17.5% vs 23.6% positive). Kept the plain default rather than
-        # deploying a "tuned" choice that measurably underperforms it on
-        # the one real generalization test available. rf_tuned below keeps
-        # the full comparison for the record.
-        "predict_threshold": 0.5,
+        # Without synthetic augmentation: tried tuning this on ISDB OOF
+        # predictions alone (0.515, barely different from 0.5), and it
+        # scored *worse* on SACAC (F1 0.628 vs 0.651 at 0.5) -- kept 0.5.
+        #
+        # With --include-synthetic: the tuned threshold (F1-maximizing on
+        # the *combined* ISDB+synthetic OOF predictions, never touching
+        # SACAC, synthetic_heldout, or any live streaming data) costs a
+        # small amount of SACAC F1 (0.607 -> 0.578, real held-out data)
+        # but fixes a much larger problem: at 0.5, a live streaming
+        # evaluation against valve-stiction-simulator's actual signal
+        # scored only 70% accuracy / F1 0.772 despite AUC 0.997 (the
+        # model ranks correctly, the threshold is just miscalibrated for
+        # this signal's probability distribution) -- the *same* tuned
+        # threshold pushed that to 96%+ accuracy / F1 0.96+ (see
+        # valve-stiction-pipeline's STREAMING_EVALUATION.md for the full
+        # numbers). Worth the small SACAC cost since this system's
+        # primary deployment target is exactly this kind of live stream.
+        "predict_threshold": (
+            rf_results["tuned"]["threshold"] if args.include_synthetic else 0.5
+        ),
         "sklearn_version": sklearn.__version__,
         "git_commit_hash": git_hash,
         "rf_best_params": rf_results["best_params"],
         "rf_default_0.5": rf_results["default_0.5"],
         "rf_tuned": rf_results["tuned"],
         "gbm_comparison": gbm_results,
+        "trained_with_synthetic": args.include_synthetic,
+        "synthetic_heldout_metrics": synthetic_heldout_metrics,
         "trained_at": trained_at,
     }
 
